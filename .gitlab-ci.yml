@@ -1,0 +1,199 @@
+stages:
+  - validate
+  - build
+  - push
+  - deploy
+  - hpa
+  - helm
+  - cleanup
+
+
+variables:
+  DOCKER_USERNAME: "junaid6468"
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+
+  WEB1_IMAGE: "${DOCKER_USERNAME}/nginx-nodejs-redis-web1"
+  WEB2_IMAGE: "${DOCKER_USERNAME}/nginx-nodejs-redis-web2"
+  NGINX_IMAGE: "${DOCKER_USERNAME}/nginx-nodejs-redis-nginx"
+
+  KUBE_NAMESPACE: "k8s-gitlab"
+
+  RELEASE_NAME: "nginx-redis-app"
+  CHART_PATH: "./helm/nginx-redis-app"
+
+
+validate:
+  stage: validate
+
+  tags:
+    - my-mac
+
+  script:
+    - docker --version
+    - kubectl version --client
+    - helm version
+    - kubectl cluster-info
+
+
+build_images:
+  stage: build
+
+  tags:
+    - my-mac
+
+  needs:
+    - validate
+
+  script:
+    - docker build -t ${WEB1_IMAGE}:${IMAGE_TAG} ./web
+    - docker build -t ${WEB2_IMAGE}:${IMAGE_TAG} ./web
+    - docker build -t ${NGINX_IMAGE}:${IMAGE_TAG} ./nginx
+
+
+push_images:
+  stage: push
+
+  tags:
+    - my-mac
+
+  needs:
+    - build_images
+
+  script:
+    - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+    - docker push ${WEB1_IMAGE}:${IMAGE_TAG}
+    - docker push ${WEB2_IMAGE}:${IMAGE_TAG}
+    - docker push ${NGINX_IMAGE}:${IMAGE_TAG}
+
+
+deploy_using_helm:
+  stage: deploy
+
+  tags:
+    - my-mac
+
+  needs:
+    - push_images
+
+  script:
+    - echo "======================================="
+    - echo "Deploying Helm Release"
+    - echo "======================================="
+
+    # Create Namespace
+    - kubectl create namespace ${KUBE_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+    # Deploy/Upgrade Helm Chart
+    - >
+     helm upgrade --install
+     ${RELEASE_NAME}
+     ${CHART_PATH}
+     --namespace ${KUBE_NAMESPACE}
+     --create-namespace
+     --set web1.image=${WEB1_IMAGE}
+     --set web1.tag=${IMAGE_TAG}
+     --set web2.image=${WEB2_IMAGE}
+     --set web2.tag=${IMAGE_TAG}
+     --set nginx.image=${NGINX_IMAGE}
+     --set nginx.tag=${IMAGE_TAG}
+
+    # Wait for all deployments
+    - kubectl rollout status deployment/redis -n ${KUBE_NAMESPACE}
+    - kubectl rollout status deployment/web1 -n ${KUBE_NAMESPACE}
+    - kubectl rollout status deployment/web2 -n ${KUBE_NAMESPACE}
+    - kubectl rollout status deployment/nginx -n ${KUBE_NAMESPACE}
+
+    # Deployment Summary
+    - echo ""
+    - echo "========== DEPLOYMENTS =========="
+    - kubectl get deployments -n ${KUBE_NAMESPACE}
+
+    - echo ""
+    - echo "========== SERVICES =========="
+    - kubectl get svc -n ${KUBE_NAMESPACE}
+
+    - echo ""
+    - echo "========== PODS =========="
+    - kubectl get pods -n ${KUBE_NAMESPACE}
+
+    - echo ""
+    - echo "========== HELM RELEASE =========="
+    - helm list -n ${KUBE_NAMESPACE}
+
+    - echo ""
+    - echo "======================================="
+    - echo "Helm Deployment Completed Successfully"
+    - echo "======================================="
+
+
+hpa_demo:
+  stage: hpa
+
+  tags:
+    - my-mac
+
+  needs:
+    - deploy_using_helm
+
+  script:
+
+    - kubectl apply -f kubernetes/web1-hpa.yaml
+    - kubectl apply -f kubernetes/web2-hpa.yaml
+
+    - echo "===== BEFORE LOAD ====="
+
+    - kubectl get hpa -n ${KUBE_NAMESPACE}
+
+    - kubectl exec deployment/web1 -n ${KUBE_NAMESPACE} -- sh -c "yes >/dev/null &"
+
+    - kubectl exec deployment/web2 -n ${KUBE_NAMESPACE} -- sh -c "yes >/dev/null &"
+
+    - sleep 90
+
+    - echo "===== AFTER LOAD ====="
+
+    - kubectl get hpa -n ${KUBE_NAMESPACE}
+
+    - kubectl top pods -n ${KUBE_NAMESPACE}
+
+
+helm_status:
+  stage: helm
+
+  tags:
+    - my-mac
+
+  needs:
+    - hpa_demo
+
+  script:
+    - helm list -n ${KUBE_NAMESPACE}
+
+    - helm status ${RELEASE_NAME} -n ${KUBE_NAMESPACE}
+
+
+cleanup:
+  stage: cleanup
+
+  tags:
+    - my-mac
+
+  when: manual
+
+  allow_failure: false
+
+  needs:
+    - hpa_demo
+
+  script:
+
+    - helm uninstall ${RELEASE_NAME} -n ${KUBE_NAMESPACE} || true
+
+    - kubectl delete namespace ${KUBE_NAMESPACE} --ignore-not-found=true
+
+    - kubectl wait --for=delete namespace/${KUBE_NAMESPACE} --timeout=180s || true
+
+    - docker image prune -af || true
+
+    - echo "Cleanup Completed"

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web2
+  namespace: k8s-gitlab
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: web2
+
+  template:
+    metadata:
+      labels:
+        app: web2
+
+    spec:
+      containers:
+      - name: web2
+        image: {{ .Values.web2.image }}
+        imagePullPolicy: Always
+
+        resources:
+          requests:
+              cpu: "100m"
+              memory: "128Mi"
+          
+          limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+        ports:
+        - containerPort: 5000
+
+        env:
+        - name: REDIS_HOST
+          value: redis  

@@ -1,0 +1,19 @@
+namespace: k8s-gitlab
+
+web1:
+  image: junaid6468/nginx-nodejs-redis-web1
+  tag: latest
+  replicas: 1
+
+web2:
+  image: junaid6468/nginx-nodejs-redis-web2
+  tag: latest
+  replicas: 1
+
+nginx:
+  image: junaid6468/nginx-nodejs-redis-nginx
+  tag: latest
+
+redis:
+  image: redis
+  tag: latest
