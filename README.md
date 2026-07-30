@@ -153,5 +153,3 @@ Feel free to open issues or PRs. Suggested improvements:
 - Add a Makefile or scripts to build and load images for kind/minikube automatically
 - Add automated tests for the web service
 
-## License
-Choose a license (e.g., MIT) and add a LICENSE file.
